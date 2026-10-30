@@ -37,16 +37,23 @@ button:focus-visible,input:focus-visible,.sq:focus-visible{outline:3px solid #f2
 <p id="st"></p>
 <div id="bd" aria-label="チェス盤"></div>
 
-<div class="card" id="join">
-  <p>部屋を作って、リンクを相手に送ると対戦できます。</p>
-  <div class="row"><button id="mk" class="p">部屋を作る</button></div>
-  <div class="row"><input id="rc" placeholder="部屋コード" autocapitalize="none" autocomplete="off"><button id="go">入る</button></div>
+<div id="join">
+  <div class="card">
+    <p>非公開の部屋はリンクを送った相手だけ、公開部屋は一覧から誰でも入れます。</p>
+    <div class="row"><button id="mk" class="p">部屋を作る(非公開)</button><button id="mp" class="p">公開部屋を作る</button></div>
+    <div class="row"><input id="rc" placeholder="部屋コード" autocapitalize="none" autocomplete="off"><button id="go">入る</button></div>
+  </div>
+  <div class="card">
+    <div class="row"><strong>公開部屋</strong><button id="rf">更新</button></div>
+    <div id="rl">読み込み中…</div>
+  </div>
 </div>
 
 <div class="card hide" id="room">
   <p>この部屋のリンク(相手に送ってください)</p>
   <div class="row"><button id="sh" class="p">リンクを送る</button><button id="cp">コピー</button></div>
   <div class="row"><button id="nw">新しい対局</button><button id="rs">投了</button></div>
+  <div class="row"><button id="pb">公開: オフ</button><button id="lv">退出</button></div>
 </div>
 </main>
 
@@ -54,7 +61,7 @@ button:focus-visible,input:focus-visible,.sq:focus-visible{outline:3px solid #f2
 <script>
 const $=id=>document.getElementById(id);
 const G=['♟','♞','♝','♜','♛','♚'],K={p:0,n:1,b:2,r:3,q:4,k:5};
-let g=new Chess(),hist=[],color='s',sel=null,tg=[],over='',ws,room='',pr={w:false,b:false},retry=0,online=false;
+let g=new Chess(),hist=[],color='s',sel=null,tg=[],over='',ws,room='',pr={w:false,b:false,pub:false},retry=0,online=false,wantPub=false;
 const side=()=>color==='b'?'b':'w';
 const link=()=>location.origin+location.pathname+'?room='+room;
 
@@ -62,7 +69,7 @@ function apply(mv){const m=g.move({from:mv.slice(0,2),to:mv.slice(2,4),promotion
 function load(moves){g=new Chess();hist=[];over='';for(const x of moves)if(!apply(x))break}
 
 function status(){
-  let t;
+  let t;$('pb').textContent='公開: '+(pr.pub?'オン':'オフ');
   if(!room)t='部屋を作るか、部屋コードを入力してください';
   else if(!online)t='接続中…';
   else if(over)t=over;
@@ -110,7 +117,7 @@ function connect(){
   ws.onopen=()=>{online=true;retry=0;render()};
   ws.onmessage=e=>{
     const m=JSON.parse(e.data);
-    if(m.t==='hello'||m.t==='sync'){if(m.color)color=m.color;load(m.moves);sel=null;tg=[]}
+    if(m.t==='hello'||m.t==='sync'){if(m.color)color=m.color;load(m.moves);sel=null;tg=[];if(m.t==='hello'&&wantPub&&color!=='s')send({t:'pub',v:true})}
     else if(m.t==='move'){apply(m.mv);sel=null;tg=[]}
     else if(m.t==='new'){g=new Chess();hist=[];over='';sel=null;tg=[]}
     else if(m.t==='resign')over=color==='s'?(m.by==='w'?'白':'黒')+'が投了しました':(m.by===color?'あなたは投了しました':'相手が投了しました。あなたの勝ちです');
@@ -119,12 +126,32 @@ function connect(){
   };
   ws.onclose=()=>{online=false;render();setTimeout(connect,Math.min(1000*++retry,5000))};
 }
-function enter(r){
-  room=r;history.replaceState(null,'','?room='+room);
+function enter(r,pub){
+  wantPub=!!pub;room=r;history.replaceState(null,'','?room='+room);
   $('join').classList.add('hide');$('room').classList.remove('hide');
   render();connect();
 }
-$('mk').onclick=()=>enter(Math.random().toString(36).slice(2,8).padEnd(6,'x'));
+const newId=()=>Math.random().toString(36).slice(2,8).padEnd(6,'x');
+$('mk').onclick=()=>enter(newId(),false);
+$('mp').onclick=()=>enter(newId(),true);
+$('pb').onclick=()=>{if(color==='s')return;wantPub=!pr.pub;send({t:'pub',v:wantPub})};
+$('lv').onclick=()=>{location.href=location.pathname};
+async function lobby(){
+  if(room)return;
+  const box=$('rl');
+  try{
+    const l=await(await fetch('/api/rooms',{cache:'no-store'})).json();
+    box.innerHTML='';
+    if(!l.length){box.textContent='公開中の部屋はありません';return}
+    for(const x of l){
+      const full=x.n>=2,row=document.createElement('div'),sp=document.createElement('span'),b=document.createElement('button');
+      row.className='row';sp.textContent='部屋 '+x.room+(full?'(対局中)':'(1人待機中)');
+      b.textContent=full?'観戦':'参加';if(!full)b.className='p';
+      b.onclick=()=>enter(x.room,false);row.append(sp,b);box.appendChild(row);
+    }
+  }catch(e){box.textContent='一覧を取得できませんでした'}
+}
+$('rf').onclick=lobby;setInterval(lobby,5000);
 $('go').onclick=()=>{const r=$('rc').value.trim().toLowerCase();if(/^[a-z0-9]{4,12}$/.test(r))enter(r);else $('st').textContent='部屋コードは英数字4〜12文字です'};
 $('cp').onclick=async()=>{try{await navigator.clipboard.writeText(link());$('cp').textContent='コピーしました'}catch(e){prompt('リンク',link())}setTimeout(()=>$('cp').textContent='コピー',1500)};
 $('sh').onclick=async()=>{try{await navigator.share({url:link(),text:'チェスしよう'})}catch(e){$('cp').click()}};
@@ -133,7 +160,7 @@ $('rs').onclick=()=>{if(color!=='s'&&!over&&!g.game_over()&&confirm('投了し�
 
 const q=new URLSearchParams(location.search).get('room');
 render();
-if(q&&/^[a-z0-9]{4,12}$/.test(q))enter(q);
+if(q&&/^[a-z0-9]{4,12}$/.test(q))enter(q,false);else lobby();
 </script>
 </body>
 </html>
