@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>オンラインチェス</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#e9eef2;--fg:#1c2833;--card:#fff;--line:#c5d0d9;--l:#dfe6ec;--d:#6f8aa3;--ok:#1f7a5a}
+html{scroll-padding-top:env(safe-area-inset-top,0px);-webkit-text-size-adjust:100%}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141b21;--fg:#e6edf2;--card:#1e2830;--line:#33434f;--l:#b9c6d1;--d:#4d6479;--ok:#4cc79a}}
+:root[data-theme="dark"]{--bg:#141b21;--fg:#e6edf2;--card:#1e2830;--line:#33434f;--l:#b9c6d1;--d:#4d6479;--ok:#4cc79a}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 "Hiragino Sans",system-ui,sans-serif;touch-action:manipulation}
+main{max-width:680px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+.card p{margin:2px 0 6px;font-size:15px}
+button,input{font:inherit;min-height:44px;padding:6px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+button{cursor:pointer}button.p{background:var(--ok);color:#fff;border-color:var(--ok)}
+input{width:9em;box-sizing:border-box;font-size:16px}
+button:focus-visible,input:focus-visible,.sq:focus-visible{outline:3px solid #f2d45c;outline-offset:1px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;align-items:center}
+#st{font-weight:700;min-height:1.6em;margin:0 0 8px}
+#bd{--s:min(94vw,640px);width:var(--s);height:var(--s);display:grid;grid-template:repeat(8,1fr)/repeat(8,1fr);margin:0 auto;border:2px solid var(--fg);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.sq{display:flex;align-items:center;justify-content:center;font-size:calc(var(--s)/8*.78);line-height:1;position:relative;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.sq.l{background:var(--l)}.sq.d{background:var(--d)}
+.sq.last{box-shadow:inset 0 0 0 100px #f2d45c88}
+.sq.sel{box-shadow:inset 0 0 0 100px #f2d45ccc}
+.sq.mv::after{content:"";width:28%;height:28%;border-radius:50%;background:#1f7a5a99;position:absolute}
+.w{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000,0 0 3px #000}.b{color:#10161c;text-shadow:0 0 1px #fff}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>オンラインチェス</h1>
+<p id="st"></p>
+<div id="bd" aria-label="チェス盤"></div>
+
+<div class="card" id="join">
+  <p>部屋を作って、リンクを相手に送ると対戦できます。</p>
+  <div class="row"><button id="mk" class="p">部屋を作る</button></div>
+  <div class="row"><input id="rc" placeholder="部屋コード" autocapitalize="none" autocomplete="off"><button id="go">入る</button></div>
+</div>
+
+<div class="card hide" id="room">
+  <p>この部屋のリンク(相手に送ってください)</p>
+  <div class="row"><button id="sh" class="p">リンクを送る</button><button id="cp">コピー</button></div>
+  <div class="row"><button id="nw">新しい対局</button><button id="rs">投了</button></div>
+</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const G=['♟','♞','♝','♜','♛','♚'],K={p:0,n:1,b:2,r:3,q:4,k:5};
+let g=new Chess(),hist=[],color='s',sel=null,tg=[],over='',ws,room='',pr={w:false,b:false},retry=0,online=false;
+const side=()=>color==='b'?'b':'w';
+const link=()=>location.origin+location.pathname+'?room='+room;
+
+function apply(mv){const m=g.move({from:mv.slice(0,2),to:mv.slice(2,4),promotion:mv[4]});if(m)hist.push(mv);return m}
+function load(moves){g=new Chess();hist=[];over='';for(const x of moves)if(!apply(x))break}
+
+function status(){
+  let t;
+  if(!room)t='部屋を作るか、部屋コードを入力してください';
+  else if(!online)t='接続中…';
+  else if(over)t=over;
+  else if(g.in_checkmate())t=color==='s'?'チェックメイト':(g.turn()===color?'チェックメイト。あなたの負けです':'チェックメイト。あなたの勝ちです');
+  else if(g.in_stalemate())t='ステイルメイト(引き分け)';
+  else if(g.in_draw())t='引き分け';
+  else if(color==='s')t='観戦中('+(g.turn()==='w'?'白':'黒')+'の番)';
+  else{
+    const opp=color==='w'?pr.b:pr.w;
+    t=(opp?'':'相手の参加を待っています。リンクを送ってください / ')+(g.turn()===color?'あなたの番です':'相手の番です')+(g.in_check()?'(チェック)':'')+' / あなたは'+(color==='w'?'白':'黒');
+  }
+  $('st').textContent=t;
+}
+function render(){
+  const bd=$('bd');bd.innerHTML='';
+  const l=hist[hist.length-1],lm=l?[l.slice(0,2),l.slice(2,4)]:[];
+  for(let i=0;i<8;i++)for(let j=0;j<8;j++){
+    const r=side()==='b'?i+1:8-i,f=side()==='b'?7-j:j,s='abcdefgh'[f]+r,p=g.get(s);
+    const e=document.createElement('div');
+    e.className='sq '+((f+r)%2?'l':'d')+(lm.includes(s)?' last':'')+(s===sel?' sel':'')+(tg.includes(s)?' mv':'');
+    e.tabIndex=0;
+    if(p){e.innerHTML='<span class="'+p.color+'">'+G[K[p.type]]+'</span>';e.setAttribute('aria-label',p.color+p.type+' '+s)}
+    e.onclick=()=>tap(s);
+    e.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();tap(s)}};
+    bd.appendChild(e);
+  }
+  status();
+}
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function tap(s){
+  if(!online||over||color==='s'||g.game_over()||g.turn()!==color)return;
+  if(sel&&tg.includes(s)){
+    const m=g.move({from:sel,to:s,promotion:'q'});
+    if(m){const mv=m.from+m.to+(m.promotion||'');hist.push(mv);send({t:'move',mv})}
+    sel=null;tg=[];return render();
+  }
+  const p=g.get(s);
+  if(p&&p.color===color){sel=s;tg=g.moves({square:s,verbose:true}).map(m=>m.to)}else{sel=null;tg=[]}
+  render();
+}
+
+function connect(){
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(proto+'//'+location.host+'/ws?room='+room);
+  ws.onopen=()=>{online=true;retry=0;render()};
+  ws.onmessage=e=>{
+    const m=JSON.parse(e.data);
+    if(m.t==='hello'||m.t==='sync'){if(m.color)color=m.color;load(m.moves);sel=null;tg=[]}
+    else if(m.t==='move'){apply(m.mv);sel=null;tg=[]}
+    else if(m.t==='new'){g=new Chess();hist=[];over='';sel=null;tg=[]}
+    else if(m.t==='resign')over=color==='s'?(m.by==='w'?'白':'黒')+'が投了しました':(m.by===color?'あなたは投了しました':'相手が投了しました。あなたの勝ちです');
+    else if(m.t==='p')pr=m;
+    render();
+  };
+  ws.onclose=()=>{online=false;render();setTimeout(connect,Math.min(1000*++retry,5000))};
+}
+function enter(r){
+  room=r;history.replaceState(null,'','?room='+room);
+  $('join').classList.add('hide');$('room').classList.remove('hide');
+  render();connect();
+}
+$('mk').onclick=()=>enter(Math.random().toString(36).slice(2,8).padEnd(6,'x'));
+$('go').onclick=()=>{const r=$('rc').value.trim().toLowerCase();if(/^[a-z0-9]{4,12}$/.test(r))enter(r);else $('st').textContent='部屋コードは英数字4〜12文字です'};
+$('cp').onclick=async()=>{try{await navigator.clipboard.writeText(link());$('cp').textContent='コピーしました'}catch(e){prompt('リンク',link())}setTimeout(()=>$('cp').textContent='コピー',1500)};
+$('sh').onclick=async()=>{try{await navigator.share({url:link(),text:'チェスしよう'})}catch(e){$('cp').click()}};
+$('nw').onclick=()=>{if(color!=='s'&&confirm('新しい対局を始めますか?'))send({t:'new'})};
+$('rs').onclick=()=>{if(color!=='s'&&!over&&!g.game_over()&&confirm('投了しますか?'))send({t:'resign'})};
+
+const q=new URLSearchParams(location.search).get('room');
+render();
+if(q&&/^[a-z0-9]{4,12}$/.test(q))enter(q);
+</script>
+</body>
+</html>
